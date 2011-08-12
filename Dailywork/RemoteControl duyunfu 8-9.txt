@@ -1,0 +1,126 @@
+8-9  duyunfu
+
+学习了工作队列，并编写红外驱动
+调试还未能通过
+
+学习内容如下：
+工作队列 
+ 
+一、       工作队列的使用
+定义一个工作队列
+Struct work_struct my_wq;
+Void my_wq_func(unsigned long);
+通过INIT_WORK可以初始化这个工作队列并将工作队列与处理函数绑定
+INIT_WORK(&my_wq,(void(*)(void*))my_wq_func,NULL)
+调度工作队列
+Schedule_work(&my_wq)
+使用模板
+struct work_struct xxx_wq;
+
+void xxx_do_work(unsigned long);
+
+void xxx_do_work(unsigned long)
+
+{
+
+      ……
+
+}
+
+irqreturn_t xxx_interrupt(int irq,void *dev_id,struct pt_regs *regs)
+
+{
+
+      ……
+
+      schedule_work(&xxx_wq);
+
+      ……
+
+}
+
+int init(void)
+
+{
+
+      ……
+
+      result=request_irq(xxx_irq,xxx_interrupt,SA_INTERRUPT,“xxx”,NULL)
+
+      ……
+
+      INIT_WORK(&xxx_wq,(void(*)(void*))xxx_do_work,NULL);
+
+      …….
+
+}
+
+void xxx_exit(void)
+
+{
+
+      ……
+
+      free_irq(xxx_irq,xxx_interrupt);
+
+      ……
+
+}
+二、       工作队列函数详解
+工作队列有 struct workqueue_struct 类型，在 <linux/workqueue.h> 中定义。一个工作队列必须明确的在使用前创建，宏为:
+struct workqueue_struct *create_workqueue(const char *name);
+struct workqueue_struct *create_singlethread_workqueue(const char *name);
+每个工作队列有一个或多个专用的进程("内核线程"), 这些进程运行提交给这个队列的函数。 若使用 create_workqueue, 就得到一个工作队列它在系统的每个处理器上有一个专用的线程。在很多情况下，过多线程对系统性能有影响，如果单个线程就足够则使用 create_singlethread_workqueue 来创建工作队列。
+提交一个任务给一个工作队列，在这里《LDD3》介绍的内核2.6.10和我用的新内核2.6.22.2已经有不同了，老接口已经不能用了，编译会出错。这里我只讲2.6.22.2的新接口，至于老的接口我想今后内核不会再有了。从这一点我们可以看出内核发展。
+/*需要填充work_struct或delayed_work结构，可以在编译时完成, 宏如下: */
+
+struct work_struct {
+    atomic_long_t data;
+#define WORK_STRUCT_PENDING 0        /* T if work item pending execution */
+#define WORK_STRUCT_FLAG_MASK (3UL)
+#define WORK_STRUCT_WQ_DATA_MASK (~WORK_STRUCT_FLAG_MASK)
+    struct list_head entry;
+    work_func_t func;
+};
+
+struct delayed_work {
+    struct work_struct work;
+    struct timer_list timer;
+};
+
+DECLARE_WORK(n, f)    
+/*n 是声明的work_struct结构名称, f是要从工作队列被调用的函数*/
+DECLARE_DELAYED_WORK(n, f)
+/*n是声明的delayed_work结构名称, f是要从工作队列被调用的函数*/
+
+/*若在运行时需要建立 work_struct 或 delayed_work结构, 使用下面 2 个宏定义:*/
+INIT_WORK(struct work_struct *work, void (*function)(void *)); 
+PREPARE_WORK(struct work_struct *work, void (*function)(void *)); 
+INIT_DELAYED_WORK(struct delayed_work *work, void (*function)(void *)); 
+PREPARE_DELAYED_WORK(struct delayed_work *work, void (*function)(void *)); 
+/* INIT_* 做更加全面的初始化结构的工作，在第一次建立结构时使用. PREPARE_* 做几乎同样的工作, 
+但是它不初始化用来连接 work_struct或delayed_work 结构到工作队列的指针。如果这个结构已经被提
+交给一个工作队列, 且只需要修改该结构,则使用 PREPARE_* 而不是 INIT_* */
+
+/*有 2 个函数来提交工作给一个工作队列:*/
+int queue_work(struct workqueue_struct *queue, struct work_struct *work);
+int queue_delayed_work(struct workqueue_struct *queue, struct delayed_work *work, unsigned long delay);
+/*每个都添加work到给定的workqueue。如果使用 queue_delay_work, 则实际的工作至少要经过指定的 
+jiffies 才会被执行。 这些函数若返回 1 则工作被成功加入到队列; 若为0，则意味着这个 work 已经在
+队列中等待，不能再次加入*/
+在将来的某个时间, 这个工作函数将被传入给定的 data 值来调用。这个函数将在工作线程的上下文运行, 因此它可以睡眠 (你应当知道这个睡眠可能影响提交给同一个工作队列的其他任务) 工作函数不能访问用户空间，因为它在一个内核线程中运行, 完全没有对应的用户空间来访问。
+取消一个挂起的工作队列入口项可以调用:
+int cancel_delayed_work(struct delayed_work *work); 
+void cancel_work_sync(struct work_struct *work)
+如果这个入口在它开始执行前被取消，则返回非零。内核保证给定入口的执行不会在调用 cancel_delay_work 后被初始化. 如果 cancel_delay_work 返回 0, 但是, 这个入口可能已经运行在一个不同的处理器, 并且可能仍然在调用 cancel_delayed_work 后在运行. 要绝对确保工作函数没有在 cancel_delayed_work 返回 0 后在任何地方运行, 你必须跟随这个调用来调用:
+void flush_workqueue(struct workqueue_struct *queue);
+在 flush_workqueue 返回后, 没有在这个调用前提交的函数在系统中任何地方运行。
+而cancel_work_sync会取消相应的work，但是如果这个work已经在运行那么cancel_work_sync会阻塞，直到work完成并取消相应的work。
+当用完一个工作队列，可以去掉它，使用:
+void destroy_workqueue(struct workqueue_struct *queue);
+三、与tasklet的联系
+工作队列类似 tasklets，允许内核代码请求在将来某个时间调用一个函数，不同在于:
+（1）tasklet 在软件中断上下文中运行，所以 tasklet 代码必须是原子的。而工作队列函数在一个特殊内核进程上下文运行，有更多的灵活性，且能够休眠。
+（2）tasklet 只能在最初被提交的处理器上运行，这只是工作队列默认工作方式。
+（3）内核代码可以请求工作队列函数被延后一个给定的时间间隔。
+（4）tasklet 执行的很快, 短时期, 并且在原子态, 而工作队列函数可能是长周期且不需要是原子的，两个机制有它适合的情形。
