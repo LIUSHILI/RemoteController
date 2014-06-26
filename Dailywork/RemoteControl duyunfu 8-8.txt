@@ -1,0 +1,100 @@
+8-8
+
+学习了红外遥控编码原理
+学习了Tasklet
+
+学习内容如下：
+Tasklet机制
+一、tasklet使用
+Tasklet的使用比较简单，只需要定义tasklet及其处理函数并将两者关联
+例子：
+Void my_tasklet_func(unsigned long)
+DECLARE_TASKLET(my_tasklet.my_tasklet_func,data)
+代码DECLARE_TASKLET实现了定义名称为my_tasklet的tasklet并将其与my_tasklet_func这个函数绑定，而传入这个函数的参数为data。
+需要调度tasklet的时候引用一个tasklet_schedule()函数就能使系统在适当的时候进行调度，如下所示
+Tasklet_schedule(&my_tasklet)
+下面给出驱动模板
+void xxx_do_tasklet(unsigned long);
+
+DECLARE_TASKLET(xxx_tasklet,xxx_do_tasklet,0);
+
+void xxx_do_tasklet(unsigned long)
+
+{
+
+……
+
+}
+
+irqreturn_t xxx_interrupt(int irq,void *dev_id,struct pt_regs *regs)
+
+{
+
+      ……
+
+      tasklet_schedule(&xxx_tasklet);
+
+      ……
+
+}
+
+int _init xxx_init(void)
+
+{
+    ……
+
+      result=request_irq(xxx_irq,xxx_interrupt,SA_INTERRUPT,”xxx”,NULL)
+
+      ……
+
+}
+
+void _exit xxx_exit(void)
+
+{
+
+      ……
+
+      free_irq(xxx_irq,xxx_irq_interrupt);
+
+      ……
+
+}
+二、tasklet函数详解
+它对于中断处理特别有用：硬件中断必须尽快处理, 但大部分的数据管理可以延后到以后安全的时间执行。
+tasklet 以一个数据结构形式存在，使用前必须被初始化。初始化能够通过调用一个特定函数或者通过使用某些宏定义声明结构:
+#include <linux/interrupt.h> 
+struct tasklet_struct
+{
+    struct tasklet_struct *next;
+    unsigned long state;
+    atomic_t count;
+    void (*func)(unsigned long);
+    unsigned long data;
+};
+void tasklet_init(struct tasklet_struct *t,
+ void (*func)(unsigned long), unsigned long data);
+
+#define DECLARE_TASKLET(name, func, data) \
+struct tasklet_struct name = { NULL, 0, ATOMIC_INIT(0), func, data }
+#define DECLARE_TASKLET_DISABLED(name, func, data) \
+struct tasklet_struct name = { NULL, 0, ATOMIC_INIT(1), func, data }
+
+void tasklet_disable(struct tasklet_struct *t); 
+/*函数暂时禁止给定的 tasklet被 tasklet_schedule 调度，直到这个 tasklet 被再次被enable；
+若这个 tasklet 当前在运行, 这个函数忙等待直到这个tasklet退出*/
+void tasklet_disable_nosync(struct tasklet_struct *t); 
+/*和tasklet_disable类似，但是tasklet可能仍然运行在另一个 CPU */
+void tasklet_enable(struct tasklet_struct *t); 
+/*使能一个之前被disable的 tasklet;若这个 tasklet 已经被调度, 它会很快运行。 tasklet_enable
+ 和tasklet_disable必须匹配调用, 因为内核跟踪每个 tasklet 的"禁止次数"*/ 
+void tasklet_schedule(struct tasklet_struct *t); 
+/*调度 tasklet 执行，如果tasklet在运行中被调度, 它在完成后会再次运行; 这保证了在其他事件被处理
+当中发生的事件受到应有的注意. 这个做法也允许一个 tasklet 重新调度它自己*/
+void tasklet_hi_schedule(struct tasklet_struct *t); 
+/*和tasklet_schedule类似，只是在更高优先级执行。当软中断处理运行时, 它处理高优先级 tasklet 在
+其他软中断之前，只有具有低响应周期要求的驱动才应使用这个函数, 可避免其他软件中断处理引入的附加周期*/
+void tasklet_kill(struct tasklet_struct *t); 
+/*确保了 tasklet 不会被再次调度来运行，通常当一个设备正被关闭或者模块卸载时被调用。如果 tasklet
+ 正在运行, 这个函数等待直到它执行完毕。若 tasklet 重新调度它自己，则必须阻止在调用 tasklet_kill 
+前它重新调度它自己，如同使用 del_timer_sync*/
